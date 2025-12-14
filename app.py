@@ -5,18 +5,25 @@ import cv2
 import numpy as np
 from PIL import Image
 from torchvision import transforms
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode, RTCConfiguration
 import av
 
 # Import class model của bạn
 from model import FaceEmotionCNN 
 
-# 1. Cấu hình & Load Model
+# -----------------------------------------------------------
+# 1. CẤU HÌNH & LOAD MODEL
+# -----------------------------------------------------------
 CLASSES = ['angry', 'contempt', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'suprise']
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 MODEL_PATH = 'final_model.pth'
 
-# Load Face Detection (Haar Cascade có sẵn trong cv2)
+# Cấu hình STUN Server cho WebRTC (để chạy online)
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
+
+# Load Face Detection (Haar Cascade)
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 @st.cache_resource
@@ -31,10 +38,9 @@ def load_model():
     model.eval()
     return model
 
-# Load model một lần duy nhất
 emotion_model = load_model()
 
-# Định nghĩa Transform giống lúc train (Grayscale -> Resize -> Tensor)
+# Transform cho model (Grayscale -> 75x75 -> Tensor)
 val_transform = transforms.Compose([
     transforms.ToPILImage(),
     transforms.Grayscale(num_output_channels=1),
@@ -43,116 +49,119 @@ val_transform = transforms.Compose([
     transforms.Normalize((0.5,), (0.5,))
 ])
 
-# 2. Class xử lý video Real-time
+# -----------------------------------------------------------
+# 2. XỬ LÝ WEBCAM REALTIME
+# -----------------------------------------------------------
 class EmotionProcessor(VideoTransformerBase):
     def recv(self, frame):
-        # Chuyển frame từ định dạng av sang numpy array (OpenCV)
         img = frame.to_ndarray(format="bgr24")
-
-        # 1. Chuyển sang ảnh xám để tìm khuôn mặt
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # 2. Phát hiện khuôn mặt
         faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
         for (x, y, w, h) in faces:
-            # 3. Cắt vùng khuôn mặt (ROI - Region of Interest)
             roi_gray = gray[y:y+h, x:x+w]
-            
-            # Xử lý ngoại lệ nếu mặt quá nhỏ
-            if roi_gray.size == 0:
-                continue
+            if roi_gray.size == 0: continue
 
-            # 4. Tiền xử lý để đưa vào model (dùng transform đã định nghĩa)
             try:
                 roi_tensor = val_transform(roi_gray).unsqueeze(0).to(DEVICE)
-
-                # 5. Dự đoán
                 with torch.no_grad():
                     outputs = emotion_model(roi_tensor)
                     probs = torch.nn.functional.softmax(outputs, dim=1)[0]
                     conf, pred_idx = torch.max(probs, 0)
-                    
+                
                 emotion_label = CLASSES[pred_idx.item()]
                 confidence = conf.item() * 100
 
-                # 6. Vẽ khung và nhãn lên hình gốc
-                color = (0, 255, 0) # Màu xanh lá
+                # Vẽ khung
+                color = (0, 255, 0)
                 if emotion_label in ['angry', 'fear', 'disgust', 'sad']:
-                    color = (0, 0, 255) # Màu đỏ cho cảm xúc tiêu cực
+                    color = (0, 0, 255)
                 
                 cv2.rectangle(img, (x, y), (x+w, y+h), color, 2)
                 cv2.putText(img, f"{emotion_label} ({confidence:.1f}%)", (x, y-10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
-            except Exception as e:
-                pass # Bỏ qua lỗi xử lý frame để stream không bị ngắt
-
-        # Trả về frame đã vẽ hình
+            except Exception:
+                pass
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# 3. Giao diện Streamlit
-st.title("🎥 Real-time Emotion Recognition")
-st.write("Sử dụng Webcam để nhận diện cảm xúc theo thời gian thực.")
-
-# Thêm tuỳ chọn (Sidebar)
+# -----------------------------------------------------------
+# 3. GIAO DIỆN CHÍNH
+# -----------------------------------------------------------
+st.title("🎥 AI Emotion Recognition")
 app_mode = st.sidebar.selectbox("Chọn chế độ", ["Webcam Realtime", "Upload Ảnh"])
 
 if app_mode == "Webcam Realtime":
+    st.write("Sử dụng Webcam để nhận diện cảm xúc theo thời gian thực.")
     if emotion_model is not None:
         ctx = webrtc_streamer(
-            key="example", 
-            mode=WebRtcMode.SENDRECV, # Quan trọng: Chế độ gửi và nhận
+            key="realtime-emotion", 
+            mode=WebRtcMode.SENDRECV,
             video_processor_factory=EmotionProcessor,
-            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-            media_stream_constraints={"video": True, "audio": False}
+            rtc_configuration=RTC_CONFIGURATION,
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True
         )
-        st.info("Nhấn 'START' để bật Camera. Hãy đảm bảo đủ ánh sáng để nhận diện tốt nhất.")
+        st.info("Nhấn 'START' và cho phép trình duyệt truy cập Camera.")
 
 elif app_mode == "Upload Ảnh":
-    # (Giữ lại code upload ảnh cũ của bạn ở đây nếu muốn)
+    st.write("Upload ảnh chứa khuôn mặt để nhận diện.")
     uploaded_file = st.file_uploader("Chọn ảnh...", type=["jpg", "png", "jpeg"])
+
     if uploaded_file is not None:
-        image = Image.open(uploaded_file).convert('RGB')
-        st.image(image, caption='Ảnh gốc', width=300)
+        # Load ảnh và hiển thị
+        image_pil = Image.open(uploaded_file).convert('RGB')
+        st.image(image_pil, caption='Ảnh gốc', width=400)
         
-        # Code xử lý ảnh tĩnh (cần thêm phần detect face cho ảnh tĩnh để chính xác hơn)
-        # Ở đây demo đơn giản đưa cả ảnh vào (như code cũ) hoặc bạn có thể update logic detect face vào đây.
-        if st.button('Dự đoán'):
-            st.title("🎭 Facial Emotion Recognition")
-            st.write("Upload một bức ảnh khuôn mặt để AI đoán cảm xúc nhé!")
-
-            uploaded_file = st.file_uploader("Chọn ảnh...", type=["jpg", "png", "jpeg"],key="upload_image_1")
-
-            if uploaded_file is not None:
-                # Hiển thị ảnh gốc
-                image = Image.open(uploaded_file)
-                st.image(image, caption='Ảnh đã upload', width=300)
+        if st.button('🔍 Phân tích cảm xúc'):
+            with st.spinner('Đang tìm khuôn mặt và phân tích...'):
+                # Chuyển đổi sang format OpenCV để tìm mặt
+                img_cv = np.array(image_pil) 
+                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR) # Convert RGB to BGR
+                gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
                 
-                if st.button('Dự đoán cảm xúc'):
-                    with st.spinner('Đang phân tích...'):
-                        try:
-                            # Load model và xử lý ảnh
-                            model = load_model()
-                            img_tensor = process_image(image)
-                            
-                            # Dự đoán
-                            with torch.no_grad():
-                                outputs = model(img_tensor)
-                                # Dùng Softmax để ra xác suất %
-                                probs = torch.nn.functional.softmax(outputs, dim=1)[0]
-                            
-                            # Lấy kết quả cao nhất
-                            conf, pred_idx = torch.max(probs, 0)
-                            pred_label = CLASSES[pred_idx.item()]
-                            
-                            # Hiển thị kết quả
-                            st.success(f"Dự đoán: **{pred_label.upper()}** ({conf.item()*100:.2f}%)")
-                            
-                            # Vẽ biểu đồ xác suất các lớp khác
-                            st.write("---")
-                            st.write("Chi tiết xác suất:")
-                            probs_dict = {class_name: float(prob) for class_name, prob in zip(CLASSES, probs)}
-                            st.bar_chart(probs_dict)
-                            
-                        except Exception as e:
-                            st.error(f"Có lỗi xảy ra: {e}")
+                # Tìm khuôn mặt
+                faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+                
+                if len(faces) == 0:
+                    st.warning("⚠️ Không tìm thấy khuôn mặt nào trong ảnh! Đang thử phân tích toàn bộ ảnh...")
+                    # Nếu không thấy mặt, thử đưa cả ảnh vào (resize về 75x75)
+                    face_roi = gray 
+                    display_img = img_cv
+                else:
+                    st.success(f"Đã tìm thấy {len(faces)} khuôn mặt.")
+                    # Lấy khuôn mặt to nhất (hoặc đầu tiên) để xử lý
+                    (x, y, w, h) = faces[0]
+                    face_roi = gray[y:y+h, x:x+w]
+                    
+                    # Vẽ khung lên ảnh để hiển thị kết quả
+                    display_img = img_cv.copy()
+                    cv2.rectangle(display_img, (x, y), (x+w, y+h), (0, 255, 0), 3)
+
+                # Dự đoán
+                try:
+                    roi_tensor = val_transform(face_roi).unsqueeze(0).to(DEVICE)
+                    
+                    with torch.no_grad():
+                        outputs = emotion_model(roi_tensor)
+                        probs = torch.nn.functional.softmax(outputs, dim=1)[0]
+                    
+                    # Kết quả
+                    conf, pred_idx = torch.max(probs, 0)
+                    pred_label = CLASSES[pred_idx.item()]
+                    
+                    # Hiển thị
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.image(cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB), caption="Vị trí khuôn mặt", width=300)
+                    with col2:
+                        st.metric(label="Cảm xúc dự đoán", value=pred_label.upper())
+                        st.progress(int(conf.item() * 100))
+                        st.write(f"Độ tin cậy: **{conf.item()*100:.2f}%**")
+                    
+                    # Biểu đồ chi tiết
+                    st.write("---")
+                    probs_dict = {name: float(p) for name, p in zip(CLASSES, probs)}
+                    st.bar_chart(probs_dict)
+                    
+                except Exception as e:
+                    st.error(f"Lỗi khi xử lý: {e}")
