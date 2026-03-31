@@ -44,26 +44,6 @@ Dự án sử dụng kiến trúc **Residual CNN** với các **Residual Blocks*
 - Huấn luyện mạng sâu hiệu quả hơn
 - Trích xuất đặc trưng khuôn mặt tốt hơn
 
-### Sơ đồ mô hình
-```mermaid
-graph TD
-    Input["Input<br/>(1 x 75 x 75 Grayscale)"] --> Conv1["Initial Conv Layer<br/>Conv 3x3 (64 filters) + BatchNorm + ReLU"]
-
-    subgraph Residual Layers
-        Conv1 --> Res1["Residual Block 1<br/>(64 filters, stride=1)"]
-        Res1 -. Skip connection .-> Res1
-        
-        Res1 --> Res2["Residual Block 2<br/>(128 filters, stride=2)"]
-        Res2 -. Skip connection .-> Res2
-        
-        Res2 --> Res3["Residual Block 3<br/>(256 filters, stride=2)"]
-        Res3 -. Skip connection .-> Res3
-    end
-
-    Res3 --> Pool["Global Average Pooling<br/>Flatten"]
-    Pool --> FC["Fully Connected Layer<br/>(Linear 256 -> 8)"]
-    FC --> Output["Output<br/>(8 Classes)"]
-```
 
 ## 3. Kết quả Huấn luyện (Metrics)
 
