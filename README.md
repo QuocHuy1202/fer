@@ -44,6 +44,34 @@ Dự án sử dụng kiến trúc **Residual CNN** với các **Residual Blocks*
 - Huấn luyện mạng sâu hiệu quả hơn
 - Trích xuất đặc trưng khuôn mặt tốt hơn
 
+### Sơ đồ mô hình
+graph TD
+    Input["Input<br/>(1 x 75 x 75 Grayscale)"] --> Conv1["Initial Conv Layer<br/>Conv 3x3 (64 filters) + BatchNorm + ReLU"]
+    
+    subgraph "Residual Layers"
+        Conv1 --> Res1["Residual Block 1<br/>(64 filters, stride=1)"]
+        Res1 -. "Skip connection" .-> Res1
+        
+        Res1 --> Res2["Residual Block 2<br/>(128 filters, stride=2)"]
+        Res2 -. "Skip connection" .-> Res2
+        
+        Res2 --> Res3["Residual Block 3<br/>(256 filters, stride=2)"]
+        Res3 -. "Skip connection" .-> Res3
+    end
+    
+    Res3 --> Pool["Global Average Pooling<br/>Flatten"]
+    Pool --> FC["Fully Connected Layer<br/>(Linear 256 -> 8)"]
+    FC --> Output["Output<br/>(8 Facial Expression Classes)"]
+    
+    %% Styling to match a clean technical diagram
+    style Input fill:#aed6f1,stroke:#2874a6,stroke-width:2px,color:#000
+    style Conv1 fill:#fcf3cf,stroke:#b7950b,stroke-width:2px,color:#000
+    style Res1 fill:#fadbd8,stroke:#cb4335,stroke-width:2px,color:#000
+    style Res2 fill:#fadbd8,stroke:#cb4335,stroke-width:2px,color:#000
+    style Res3 fill:#fadbd8,stroke:#cb4335,stroke-width:2px,color:#000
+    style Pool fill:#d5dbdb,stroke:#707b7c,stroke-width:2px,color:#000
+    style FC fill:#d5dbdb,stroke:#707b7c,stroke-width:2px,color:#000
+    style Output fill:#aeb6bf,stroke:#2e4053,stroke-width:2px,color:#000
 
 ## 3. Kết quả Huấn luyện (Metrics)
 
@@ -66,3 +94,19 @@ Mô hình đạt ~**91% accuracy** trên validation set. Khoảng cách giữa t
 
 ## 4. Classification Report
 ![Classification Report](images/report.png)
+
+## 5. Hướng dẫn chạy chương trình
+
+### 1. Cài đặt thư viện
+
+Cài đặt các dependencies cần thiết:
+
+```bash
+pip install -r requirements.txt 
+```
+
+### Chạy chương trình
+
+```bash
+streamlit run app.py
+```
